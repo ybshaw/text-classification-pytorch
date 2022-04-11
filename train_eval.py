@@ -9,13 +9,14 @@ import numpy as np
 from tqdm import trange
 import torch
 from sklearn.metrics import accuracy_score, classification_report
-from utils import EarlyStopping, CommonModelDataset
-from utils import get_dataloader, read_labels, read_corpus, get_vocab, get_label2idx
-from models import BertModel, TextCNN, TextRNN, TextRCNN, TextRNNAttention, TextDPCNN
+from transformers import BertModel, BertTokenizer
+from utils import EarlyStopping, CommonModelDataset, BertModelDataset
+from utils import get_dataloader, read_labels, read_corpus, get_vocab, get_label2idx, set_random_seed
+from models import Bert, TextCNN, TextRNN, TextRCNN, TextRNNAttention, TextDPCNN
 
 
 def train(train_loader, dev_loader, model, epoch, loss_func, device=None, is_bert_model=False):
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-2)
+    optimizer = torch.optim.Adam(model.parameters(), lr=5e-3, weight_decay=1e-2)
     early_stopping = EarlyStopping(patience=2, verbose=False)
 
     for i in trange(epoch, desc='Epoch'):
@@ -27,13 +28,14 @@ def train(train_loader, dev_loader, model, epoch, loss_func, device=None, is_ber
         for idx, batch in enumerate(train_loader):
             input_ids = batch['input_ids'].to(device)
             label_ids = batch['label_ids'].to(device)
-            attn_mask = batch['attn_mask'].to(device)   # (batch, seq_len)
+            attn_mask = batch['attn_mask'].to(device)                   # (batch, seq_len)
+            print(input_ids.size(), label_ids.size(), attn_mask.size())
 
-            label_ids = label_ids.squeeze()              # (batch, )
+            label_ids = label_ids.squeeze()                             # (batch, )
             if is_bert_model:
-                output = model(input_ids, attention_mask=attn_mask)    # (batch, n_labels)
+                output = model(input_ids, attn_mask=attn_mask)          # (batch, n_labels)
             else:
-                output = model.forward(input_ids)
+                output = model(input_ids)
             loss = loss_func(output, label_ids)
             tr_loss += loss.item()
             n_steps += 1
@@ -42,7 +44,7 @@ def train(train_loader, dev_loader, model, epoch, loss_func, device=None, is_ber
                 avg_loss = tr_loss / n_steps
                 print('batch loss is:{:.5f}'.format(avg_loss))
 
-            pred = torch.argmax(output, axis=1)         # (batch, )
+            pred = torch.argmax(output, axis=1)                         # (batch, )
             tmp_acc = accuracy_score(label_ids.cpu().numpy(), pred.cpu().numpy())
             tr_acc += tmp_acc
 
@@ -60,6 +62,7 @@ def train(train_loader, dev_loader, model, epoch, loss_func, device=None, is_ber
             early_stopping.save_checkpoint(dev_loss, model)
             break
 
+
 def valid(dev_loader, model, loss_func, device=None, is_bert_model=False):
     dev_loss, dev_acc = 0, 0
     n_steps = 0
@@ -69,24 +72,25 @@ def valid(dev_loader, model, loss_func, device=None, is_bert_model=False):
         for idx, batch in enumerate(dev_loader):
             input_ids = batch['input_ids'].to(device)
             label_ids = batch['label_ids'].to(device)
-            attn_mask = batch['attn_mask'].to(device)  # (batch, seq_len)
+            attn_mask = batch['attn_mask'].to(device)                   # (batch, seq_len)
 
-            label_ids = label_ids.squeeze()             # (batch, )
+            label_ids = label_ids.squeeze()                             # (batch, )
             if is_bert_model:
-                output = model(input_ids, attention_mask=attn_mask)  # (batch, n_labels)
+                output = model(input_ids, attn_mask=attn_mask)          # (batch, n_labels)
             else:
                 output = model(input_ids)
             loss = loss_func(output, label_ids)
             dev_loss += loss.item()
             n_steps += 1
 
-            pred = torch.argmax(output, axis=1)         # (batch, )
+            pred = torch.argmax(output, axis=1)                         # (batch, )
             tmp_acc = accuracy_score(label_ids.cpu().numpy(), pred.cpu().numpy())
             dev_acc += tmp_acc
     dev_loss = dev_loss / n_steps
     dev_acc = dev_acc / n_steps
 
     return dev_loss, dev_acc
+
 
 def evaluate(test_loader, model, label2idx, device=None, save_model_path=None, is_bert_model=False):
     preds, targets, = [], []
@@ -102,7 +106,7 @@ def evaluate(test_loader, model, label2idx, device=None, save_model_path=None, i
             attn_mask = batch['attn_mask'].to(device)
 
             if is_bert_model:
-                output = model(input_ids, attention_mask=attn_mask)  # (batch, n_labels)
+                output = model(input_ids, attn_mask=attn_mask)      # (batch, n_labels)
             else:
                 output = model(input_ids)
 
@@ -117,44 +121,41 @@ def evaluate(test_loader, model, label2idx, device=None, save_model_path=None, i
 
 
 if __name__ == "__main__":
+    set_random_seed(seed=2022)
+
     label_path = 'dataset/TNEWS/labels.json'
     train_corpus_path = 'dataset/TNEWS/train.json'
     dev_corpus_path = 'dataset/TNEWS/dev.json'
-
 
     labels_list =read_labels(label_path)
     train_corpus = read_corpus(train_corpus_path)      # train: 53360
     vocab2idx = get_vocab(train_corpus)
     label2idx = get_label2idx(labels_list)
 
-    dev_corpus = read_corpus(dev_corpus_path)           # len: 10000
-    np.random.shuffle(dev_corpus)
-    dev_corpus = dev_corpus[:8000]                      # dev: 8000
-    test_corpus = dev_corpus[8000: ]                    # test: 2000
+    dev_data = read_corpus(dev_corpus_path)           # len: 10000
+    np.random.shuffle(dev_data)
+    dev_corpus = dev_data[:8000]                      # dev: 8000
+    test_corpus = dev_data[8000: ]                    # test: 2000
 
-    train_params = {"batch_size":64, "shuffle":True}
+    train_params = {"batch_size":32, "shuffle":True}
     dev_params = {"batch_size":32, "shuffle":False}
     test_params = {"batch_size": 64, "shuffle": False}
 
-    train_loader = get_dataloader(train_corpus, vocab2idx, label2idx, max_len=20, params=train_params)
-    dev_loader = get_dataloader(dev_corpus, vocab2idx, label2idx, max_len=20, params=dev_params)
-    test_loader = get_dataloader(test_corpus, vocab2idx, label2idx, max_len=20, params=test_params)
+    bert_model_path = 'bert-base-chinese'
+    tokenizer = BertTokenizer.from_pretrained(bert_model_path)
+
+    train_loader = get_dataloader(train_corpus, vocab2idx, label2idx, max_len=30, params=train_params)
+    dev_loader = get_dataloader(dev_corpus, vocab2idx, label2idx, max_len=30, params=dev_params)
+    test_loader = get_dataloader(test_corpus, vocab2idx, label2idx, max_len=30, params=test_params)
 
     loss_func = torch.nn.CrossEntropyLoss()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model = TextCNN(filter_size=[2, 3, 4], n_filters=100, vocab_size=len(vocab2idx), embed_size=200,
                     seq_len=20, dropout=0.3, n_labels=len(label2idx)).to(device)
-    # model = TextRNN(vocab_size=len(vocab2idx), embed_size=50, hidden_size=64, dropout=0.3, n_labels=len(label2idx))
-    # model = TextRCNN(vocab_size=len(vocab2idx), embed_size=50, hidden_size=63, seq_len=20, dropout=0.3, n_labels=len(label2idx))
-    # model = TextRNNAttention(vocab_size=len(vocab2idx), embed_size=50, hidden_size=64, dropout=0.3,
-    #                  n_labels=len(label2idx))
-    # model = TextDPCNN(vocab_size=len(vocab2idx), embed_size=200,n_filters=100,
-    #                   seq_len=20, dropout=0.3, n_labels=len(label2idx))
+    # model = Bert(bert_model_path, labels_list).to(device)
 
+    train(train_loader, dev_loader, model, epoch=1, loss_func=loss_func, device=device, is_bert_model=True)
 
-
-    # train(train_loader, dev_loader, model, epoch=50, loss_func=loss_func, device=device)
-
-    res = evaluate(test_loader, model, label2idx, device, save_model_path='checkpoint.pt')
+    res = evaluate(test_loader, model, label2idx, device, save_model_path='checkpoint.pt', is_bert_model=True)
     print(res)

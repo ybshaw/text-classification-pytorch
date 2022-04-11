@@ -20,13 +20,14 @@ class Bert(nn.Module):
         self.model_name = 'bert-base-chinese'
         self.bert = BertModel.from_pretrained(model_path)
         self.bert_config = BertConfig.from_pretrained(model_path)
-        self.hidden_size = self.bert_config.hidden_size         # bert hidden_size:768
+        self.hidden_size = self.bert_config.hidden_size             # bert hidden_size: 768
         self.n_labels = len(labels_list)
         self.linear = nn.Linear(self.hidden_size, self.n_labels)
 
     def forward(self, input_ids=None, attn_mask=None):
-        _, pool = self.bert(input_ids=input_ids, attention_mask=attn_mask, output_hidden_states=False)  # pool:(batch, hidden_size)
-        output = self.linear(pool)  # (batch, n_labels)
+        bert_out = self.bert(input_ids=input_ids, attention_mask=attn_mask, output_hidden_states=False)
+        sequence_out, pool_out = bert_out[0], bert_out[1]
+        output = self.linear(pool_out)                              # (batch, n_labels)
         return output
 
 
@@ -48,7 +49,7 @@ class TextCNN(nn.Module):
             for k in filter_size])
         self.linear = nn.Linear(n_filters * len(filter_size), self.n_labels)
 
-        # 自定义初始化方式，视情况选择
+        # 自定义embedding层的初始化方式（optional）
         # self.embedding.weight.data.copy_(torch.from_numpy(self.init_embedding(
         #     vocab_size, embed_size)))
 
@@ -67,14 +68,11 @@ class TextCNN(nn.Module):
         return init_embedding
 
     def forward(self, x):
-        embed = self.embedding(x)       # (batch,seq_len,embed_size)
-        # 需要先交换后两个维度，因为一维卷积是在最后一个维度上卷积，所以需要把seq_len放到最后一个维度
-        embed = embed.permute(0, 2, 1)  # (batch, embed_size, seq_len)
-        for conv in self.convs:
-            res = conv(embed)
-
+        embed = self.embedding(x)               # (batch,seq_len,embed_size)
+        # 一维卷积是在最后一个维度上卷积，所以需要把seq_len放到最后一个维度
+        embed = embed.permute(0, 2, 1)          # (batch, embed_size, seq_len)
         out = [conv(embed) for conv in self.convs]
-        out = torch.cat(out, dim=1)     # (batch,num_filter * len(filter_size),1)
+        out = torch.cat(out, dim=1)             # (batch,num_filter * len(filter_size),1)
         out = out.view(-1, out.size(1))
         out = self.linear(self.dropout(out))    # (batch, n_labels)
         return out
@@ -89,13 +87,12 @@ class TextRNN(nn.Module):
         self.embedding = nn.Embedding(vocab_size, embed_size)
         self.lstm = nn.LSTM(embed_size, hidden_size//2, num_layers=1, batch_first=True, bidirectional=True)
         self.linear = nn.Linear(hidden_size, n_labels)
-        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         embed = self.embedding(x)
-        lstm_out, _ = self.lstm(embed)      # (batch, seq_len, hidden_size)
-        output = lstm_out[:, -1, :]         # 取最后时刻作为输出: (batch, hidden_size)
-        output = self.linear(self.dropout(output))  # (batch, n_labels)
+        lstm_out, _ = self.lstm(embed)          # (batch, seq_len, hidden_size)
+        output = lstm_out[:, -1, :]             # 取最后时刻作为输出: (batch, hidden_size)
+        output = self.linear(output)            # (batch, n_labels)
         return output
 
 
@@ -186,7 +183,7 @@ class TextDPCNN(nn.Module):
 
         # 1/2池化,需要先pad一层0
         x = self.pad_0(x)               # 仅在下面PAD
-        pool_x = self.max_pool(x)       # [b,200,9,1]
+        pool_x = self.max_pool(x)
 
         # 第一个等长卷积
         x = self.pad_1(pool_x)          # 上下都PAD

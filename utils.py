@@ -8,6 +8,7 @@
 数据的预处理
 """
 
+import random
 import numpy as np
 import json
 import torch
@@ -120,7 +121,7 @@ class BertModelDataset(Dataset):
                                                truncation=True)
         input_ids = tokenized['input_ids']
         attn_mask = tokenized['attention_mask']
-        label_ids = self.label2idx[label]
+        label_ids = [self.label2idx[label]]
 
         return {'input_ids': torch.tensor(input_ids, dtype=torch.long),
                 'label_ids': torch.tensor(label_ids, dtype=torch.long),
@@ -171,7 +172,13 @@ def get_dataloader(corpus, vocab2idx, label2idx, tokenizer=None, is_bert_model=F
     dataloader = DataLoader(dataset, **params)
     return dataloader
 
+def set_random_seed(seed=2022):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
 
 if __name__ == "__main__":
     pass
-
